@@ -1,0 +1,199 @@
+---
+title: "Predicting thyroid diagnoses with decision trees"
+output: html_notebook
+---
+
+## 1.0 Introduction
+
+This is a dataset made available by Spain's Ministry of Education and Science in its KEEL (Knowledge Extraction and Evolutionary Learning) [repository](http://sci2s.ugr.es/keel/datasets.php). I think it would be terrific if we could leverage machine learning to improve predictions in healthcare. It could potentially spare patients from a lot of anxiety as well as save a lot of money and effort.
+<br>
+
+## 2.0 Getting ahold of the data
+
+### 2.1 Downloading the data
+
+The data can be downloaded [here](http://sci2s.ugr.es/keel/dataset/data/classification/thyroid.zip). The data glossary is [here](http://sci2s.ugr.es/keel/dataset/data/classification/thyroid-names.txt). 
+
+### 2.2 Reading the data
+Having downloaded the data, we read it into R. We skip the first 26 lines of the file which contain information about the file but no actual data.
+```{r}
+thyroid <- read.csv("thyroid.dat", header = FALSE, skip = 26) # skipping the first 26 lines
+colnames(thyroid) <- c("age", "sex", "on_thyroxine", "query_on_thyroxine", "antithyroid_medication", "sick", "pregnant", "thyroid_surgery", "I131_treatment", "query_hypothyroid", "query_hyperthyroid", "lithium", "goitre", "tumor", "hypopituitary", "psych", "TSH", "T3", "TT4", "T4U", "FTI","class")
+str(thyroid)
+```
+<br>
+
+There are $7200$ observations with $21$ predictors and $1$ response variable, $class$.
+
+## 3.0 Data exploration and munging
+
+### 3.1 Data exploration
+
+There are $21$ predictors. $age$ is given as number between $0$ and $1$. $sex$ is a Boolean variable. It's not clear whether $1$ means "male" or "female". There are many Boolean variables: $on\_thyroxine$ tells us whether the patient is on [Levothyroxine](http://www.webmd.com/drugs/2/drug-13826/l-thyroxine-oral/details), $query\_on\_thyroxine$ whether the patient was asked if he was taking Levothyroxine, $antithyroid\_medication$ whether the patient is on any medication to treat a thyroid condition, and so on. Some that aren't too obvious, or at least not to me: $I131\_treatment$ tells us if the patient is under [I131 treatment](https://www.radiologyinfo.org/en/info.cfm?pg=radioiodine), $lithium$ if the patient is taking [lithium](http://psycheducation.org/treatment/mood-stabilizers/the-big-three-for-bipolar-depression/lithium/lithium-risks/) for a different condition, $goitre$ whether the patient exhibits [goiter](https://en.wikipedia.org/wiki/Goitre), and $hypopituitary$ whether the patient has [hypopituitarism](https://pituitarysociety.org/patient-education/pituitary-disorders/hypopituitarism/what-are-the-symptoms-of-hypopituitarism). I am not sure what $psych$ stands for. The variables $TSH$, $T3$, $TT4$, $T4U$, and $FTI$ represent the results of various blood tests used to screen for thyroid problems.
+<br>
+
+The response variable is $class$, which can take $1$ of $3$ values: $1$ is normal, $2$ is [hyperthyroidism](https://en.wikipedia.org/wiki/Hyperthyroidism), and $3$ [hypothyroidism](https://www.thyroid.org/hypothyroidism/). Over $90\%$ of the observations are classified as hypothyroidism.
+<br>
+
+### 3.2 Data munging
+
+We can start by changing $age$ to numbers we are familiar with, and converting the response to a factor variable. We will also change the response from type integer to factor.
+```{r}
+# Changle "class" to factor
+thyroid$class <- factor(thyroid$class)
+# Multiply "age" by 100
+thyroid$age <- 100 * thyroid$age
+```
+<br>
+
+There is no missing data in the dataset.
+
+### 3.4 Splitting into training and testing datasets
+
+Let's split the data into training and testing data sets.
+```{r}
+library(caTools)
+set.seed(1000) # reproducibility
+split <- sample.split(thyroid$class, SplitRatio = 0.7)
+thyroid_train <- subset(thyroid, split==TRUE)
+thyroid_test <- subset(thyroid, split==FALSE)
+```
+<br>
+
+## 4.0 Decision trees
+
+Loading the required libraries
+```{r}
+library(rpart)
+library(rpart.plot)
+```
+<br>
+
+Now let's build the tree and plot it. We will use all the predictors to build the tree. The parameter *minbucket* allows us to select how the minimum number of observations that are placed in one of the tree's "leaves" or "buckets".
+```{r}
+# Building a tree with a minimum of 50 observations on each leaf
+thyroid_tree <- rpart(class ~ ., data = thyroid_train, control=rpart.control(minbucket=50))
+prp(thyroid_tree)
+```
+<br>
+
+The tree splits on 3 of the variables. If we were to change the *minbucket* parameter, we would get more or fewer splits. Sticking with this tree for now, let's get its accuracy on the training set itself.
+```{r}
+# Generate predictions on training set
+PredictCART_train = predict(thyroid_tree, type = "class")
+# Confusion matrix of training set
+conf_matrix_train <- table(thyroid_train$class, PredictCART_train)
+conf_matrix_train
+```
+<br>
+
+The rows are the ground truth whereas the columns are the predictions generated by the tree. The tree perfectly predicts the normal and hyperthyroidism cases on the training set. We can compute its overall accuracy as the ratio of the correct predictions to the size of the dataset.
+<br>
+
+$$
+Accuracy=\frac{Number\ of\ normal,\ hyperthyroidism,\ and\ hypothyroidism\ cases\ correctly\ predicted}{Total\ number\ of\ cases}
+$$
+<br>
+
+The number of the correctly predicted cases is the sum of the diagonals of the matrix.
+```{r}
+sum(diag(conf_matrix_train)) / sum(conf_matrix_train)
+```
+<br>
+
+So the accuracy is over $99\%$. What is the performance of this tree on the test set?
+```{r}
+PredictCART_test = predict(thyroid_tree, newdata = thyroid_test, type = "class")
+# Confusion matrix of test set
+conf_matrix_test <- table(thyroid_test$class, PredictCART_test)
+conf_matrix_test
+```
+<br>
+
+The accuracy of this tree on the testing set is:
+```{r}
+sum(diag(conf_matrix_test)) / sum(conf_matrix_test)
+```
+<br>
+
+The performance of the tree on the test set is just as strong as on the training set. Can we do even better?
+
+### 4.1 Cross-validation
+
+We can use cross-validation to obtain the tree that maximizes accuracy. There is a parameter called *cp*, or complexity parameter, that allows us, indirectly, to specify how many observations will be placed on each leaf. We can do 10-fold cross-validation for each *cp* value, compute the average accuracy of each *cp* value, and then take the best *cp* value and build the final tree with it.
+<br>
+
+Let's load the libraries we will need to perform the cross-validation:
+```{r}
+library(caret)
+library(e1071)
+```
+<br>
+
+Now define the parameters of the cross-validation. We will try values of $cp$ from $0.01$ to $0.50$, in steps of $0.01$.
+```{r}
+# Setting cross-validation to be 10-fold
+fitControl = trainControl( method = "cv", number = 10 )
+# Setting cp to .01, .02, ..., 0.5
+cartGrid = expand.grid( .cp = (1:50)*0.01) 
+```
+<br>
+
+Perform the cross-validation to determine the best *cp* parameter. The `train` function will, for each value of $cp$, perform 10-fold cross-validation, and report the average accuracy of the $10$ runs for that value of $cp$. Since there are $50$ values of $cp$ and we are performing 10-fold cross-validation for each of them, `train()` builds $500$ trees and computes the accuracy of each. So it takes a little while to run.
+```{r}
+train(class ~ ., data = thyroid_train, method = "rpart", trControl = fitControl, tuneGrid = cartGrid)
+```
+<br>
+
+The `train()` function from the **caret** package selects the best value of *cp*: $0.03$. We can then use this value to build the final tree:
+```{r}
+thyroid_tree_cv <- rpart(class ~ ., data = thyroid_train, control=rpart.control(cp=0.03))
+prp(thyroid_tree_cv)
+```
+<br>
+
+Now we can compute the accuracy on the training set again.
+```{r}
+# Generate predictions on training set using cross-validated tree
+PredictCART_train_cv = predict(thyroid_tree_cv, type = "class")
+# Confusion matrix of training set
+conf_matrix_train_cv <- table(thyroid_train$class, PredictCART_train_cv)
+conf_matrix_train_cv
+```
+<br>
+
+The accuracy on the training set is even higher now:
+```{r}
+sum(diag(conf_matrix_train_cv)) / sum(conf_matrix_train_cv)
+```
+<br>
+
+Finally, what about the accuracy of the tree on the test set?
+```{r}
+# Generate predictions on test set using cross-validated set
+PredictCART_test_cv = predict(thyroid_tree_cv, newdat = thyroid_test, type = "class")
+# Confusion matrix of training set
+conf_matrix_test_cv <- table(thyroid_test$class, PredictCART_test_cv)
+conf_matrix_test_cv
+```
+<br>
+
+```{r}
+sum(diag(conf_matrix_test_cv)) / sum(conf_matrix_test_cv)
+```
+<br>
+
+Out of more than $2100$ cases in the test set, only $14$ were misclassified by the model. How big an improvement is this over not bothering to use any model at all and merely predicting each case will be hypothyroidism, i.e., $class=3$? The vast majority of the cases are indeed hypothyroidism.
+```{r}
+hypothyroidism_num <- nrow(thyroid_test[thyroid_test$class == "3",])
+total_cases <- nrow(thyroid_test)
+baseline_accuracy <- hypothyroidism_num / total_cases
+baseline_accuracy
+```
+<br>
+
+The no-model-at-all baseline accuracy of $92.6\%$ is $6.8\%$ worse than that of the optimized tree we built.
+
+## 5.0 References
+
+1. Bertsimas, D., O'Hair, A. ***The Analytics Edge***. Spring 2014. [edX.org](www.edX.org).
